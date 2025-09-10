@@ -1,25 +1,19 @@
 name: build-vsix
-
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # Evita ERR_OSSL_EVP_UNSUPPORTED con toolchains antiguos (Webpack 4)
-      NODE_OPTIONS: --openssl-legacy-provider
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node (22.x)
-        uses: actions/setup-node@v4
         with:
-          node-version: '22.x'
+          fetch-depth: 0
 
-      - name: Detect extension root (has engines.vscode)
+      # 1) Detectar carpeta raíz de la extensión (la que contiene engines.vscode)
+      - name: Detect extension root
         id: root
         shell: bash
         run: |
@@ -30,23 +24,35 @@ jobs:
             if grep -q '"vscode"' "$f"; then roots+=("$(dirname "$f")"); fi
           done
           if [ ${#roots[@]} -eq 0 ]; then
-            echo "::error::No se encontró ningún package.json con engines.vscode"; exit 1
+            echo "::error::No se encontró package.json con engines.vscode"; exit 1
           fi
           echo "dir=${roots[0]}" >> "$GITHUB_OUTPUT"
           echo "Usando ${roots[0]}"
 
-      - name: Instalar dependencias (npm)
+      # 2) Node 14 para instalar deps y compilar (sqlite3@4.2.0 necesita toolchain antiguo)
+      - name: Setup Node 14.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '14.x'
+
+      - name: Node/npm versions
+        run: |
+          node -v
+          npm -v
+
+      - name: Install dependencies (npm)
         working-directory: ${{ steps.root.outputs.dir }}
         shell: bash
         run: |
           set -e
+          # si hay lock antiguo, deja que npm lo actualice; evita auditoría para ir más rápido/limpio
           if [ -f package-lock.json ]; then
-            npm ci
+            npm install --no-audit --no-fund
           else
             npm install --no-audit --no-fund
           fi
 
-      - name: Compilar (si hay script)
+      - name: Build (if scripts exist)
         working-directory: ${{ steps.root.outputs.dir }}
         shell: bash
         run: |
@@ -59,17 +65,17 @@ jobs:
             echo "Sin script de build; continúo."
           fi
 
-      - name: Empaquetar con vsce
+      # 3) Empaquetar con versión antigua de vsce compatible con Node 14
+      - name: Package with vsce@1.93.0 (Node 14)
         working-directory: ${{ steps.root.outputs.dir }}
         shell: bash
         run: |
           set -e
-          npm i -g @vscode/vsce
-          vsce --version
-          # --no-dependencies evita que vsce intente resolver deps fuera del bundle
-          vsce package --no-dependencies
+          npx vsce@1.93.0 --version
+          # --no-dependencies evita que vsce toque node_modules
+          npx vsce@1.93.0 package --no-dependencies
 
-      - name: Subir VSIX
+      - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
           name: vsix
