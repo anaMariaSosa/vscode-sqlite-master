@@ -1,0 +1,43 @@
+name: build-vsix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install deps
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            npm i -g pnpm && pnpm i
+          elif [ -f yarn.lock ]; then
+            corepack enable && yarn install --frozen-lockfile
+          else
+            npm ci || npm i
+          fi
+
+      - name: Build (si aplica)
+        run: |
+          if npm run | grep -q "compile"; then npm run compile; fi
+
+      - name: Package with vsce
+        run: |
+          npm i -g @vscode/vsce
+          vsce package --no-dependencies false
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: "*.vsix"

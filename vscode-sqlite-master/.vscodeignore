@@ -1,0 +1,13 @@
+.vscode/
+.data/
+node_modules/
+tests/
+dist/**/*.map
+src/
+static/
+.github/
+.gitignore
+tsconfig.json
+tslint.json
+webpack.config.js
+jest.config.js
