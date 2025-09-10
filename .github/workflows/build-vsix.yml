@@ -6,51 +6,71 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Evita ERR_OSSL_EVP_UNSUPPORTED con toolchains antiguos (Webpack 4)
+      NODE_OPTIONS: --openssl-legacy-provider
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # 👇 Fuerza Node 16 (compat. con Webpack 4)
-      - uses: actions/setup-node@v4
+      - name: Setup Node (22.x)
+        uses: actions/setup-node@v4
         with:
-          node-version: '16.x'
+          node-version: '22.x'
 
-      - name: Ver versiones
+      - name: Detect extension root (has engines.vscode)
+        id: root
+        shell: bash
         run: |
-          node -v
-          npm -v
+          set -euo pipefail
+          shopt -s globstar nullglob
+          roots=()
+          for f in **/package.json; do
+            if grep -q '"vscode"' "$f"; then roots+=("$(dirname "$f")"); fi
+          done
+          if [ ${#roots[@]} -eq 0 ]; then
+            echo "::error::No se encontró ningún package.json con engines.vscode"; exit 1
+          fi
+          echo "dir=${roots[0]}" >> "$GITHUB_OUTPUT"
+          echo "Usando ${roots[0]}"
 
       - name: Instalar dependencias (npm)
+        working-directory: ${{ steps.root.outputs.dir }}
+        shell: bash
         run: |
-          if [ -f package.json ]; then
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install --no-audit --no-fund
-            fi
+          set -e
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            echo "No hay package.json en la raíz; busco uno..."
-            first=$(find . -path "*/node_modules/*" -prune -o -name package.json -print | head -n1 || true)
-            if [ -z "$first" ]; then
-              echo "::error::No se encontró package.json"; exit 1
-            fi
-            dir=$(dirname "$first")
-            echo "Usando $dir"
-            cd "$dir"
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install --no-audit --no-fund
-            fi
+            npm install --no-audit --no-fund
           fi
 
-      - name: Instalar vsce y empaquetar
+      - name: Compilar (si hay script)
+        working-directory: ${{ steps.root.outputs.dir }}
+        shell: bash
         run: |
+          set -e
+          if npm run | grep -q "^  vscode:prepublish"; then
+            npm run vscode:prepublish
+          elif npm run | grep -q "^  compile"; then
+            npm run compile
+          else
+            echo "Sin script de build; continúo."
+          fi
+
+      - name: Empaquetar con vsce
+        working-directory: ${{ steps.root.outputs.dir }}
+        shell: bash
+        run: |
+          set -e
           npm i -g @vscode/vsce
-          vsce package
+          vsce --version
+          # --no-dependencies evita que vsce intente resolver deps fuera del bundle
+          vsce package --no-dependencies
 
       - name: Subir VSIX
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: "**/*.vsix"
+          path: ${{ steps.root.outputs.dir }}/*.vsix
