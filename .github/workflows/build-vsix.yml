@@ -1,43 +1,89 @@
 name: build-vsix
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # botón "Run workflow"
   push:
-    branches: [ main ]
+    branches: [ main ] # opcional: también al hacer push
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (LTS)
+      - name: Show tree (debug)
+        run: |
+          pwd
+          ls -la
+          echo "---- find package.json ----"
+          find . -name package.json | sed -n '1,50p'
+
+      - name: Detect extension root (folder with package.json)
+        id: root
+        shell: bash
+        run: |
+          set -e
+          if [ -f package.json ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            first=$(find . -path "*/node_modules/*" -prune -o -name package.json -print | head -n1 || true)
+            if [ -z "$first" ]; then
+              echo "::error::No se encontró package.json. Sube tu extensión o indica subcarpeta."
+              exit 1
+            fi
+            echo "dir=$(dirname "$first")" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Usando dir=$(cat "$GITHUB_OUTPUT" | sed 's/dir=//')"
+
+      - name: Setup Node LTS
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
 
-      - name: Install deps
+      - name: Node/npm versions (debug)
         run: |
-          if [ -f pnpm-lock.yaml ]; then
-            npm i -g pnpm && pnpm i
-          elif [ -f yarn.lock ]; then
-            corepack enable && yarn install --frozen-lockfile
+          node -v
+          npm -v
+
+      - name: Mostrar package.json (debug)
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          sed -n '1,160p' package.json || true
+
+      - name: Install deps (npm)
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          # npm ci falla si no hay package-lock.json; hacemos fallback a npm i
+          npm ci || npm i
+
+      - name: Build (si hay script compile)
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          if npm run | grep -q "^  compile"; then
+            npm run compile
           else
-            npm ci || npm i
+            echo "Sin script compile; continúo."
           fi
 
-      - name: Build (si aplica)
-        run: |
-          if npm run | grep -q "compile"; then npm run compile; fi
-
       - name: Package with vsce
+        working-directory: ${{ steps.root.outputs.dir }}
         run: |
           npm i -g @vscode/vsce
-          vsce package --no-dependencies false
+          vsce --version
+          # IMPORTANTE: package.json debe tener publisher, name, version, engines.vscode
+          # y un README.md (recomendado) para que no se queje
+          vsce package
+
+      - name: Verify VSIX
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          ls -l *.vsix || { echo "::error::No se generó .vsix"; exit 1; }
 
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: "*.vsix"
+          path: ${{ steps.root.outputs.dir }}/*.vsix
+
