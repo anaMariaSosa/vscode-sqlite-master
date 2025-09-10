@@ -1,104 +1,56 @@
 name: build-vsix
 
 on:
-  workflow_dispatch:   # botón "Run workflow"
-  push:
-    branches: [ main ] # opcional: también al hacer push
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Show tree (debug)
-        run: |
-          pwd
-          ls -la
-          echo "---- find package.json ----"
-          find . -name package.json | sed -n '1,50p'
-
-      - name: Detect extension root (folder with package.json)
-        id: root
-        shell: bash
-        run: |
-          set -e
-          if [ -f package.json ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-          else
-            first=$(find . -path "*/node_modules/*" -prune -o -name package.json -print | head -n1 || true)
-            if [ -z "$first" ]; then
-              echo "::error::No se encontró package.json. Sube tu extensión o indica subcarpeta."
-              exit 1
-            fi
-            echo "dir=$(dirname "$first")" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Usando dir=$(cat "$GITHUB_OUTPUT" | sed 's/dir=//')"
-
-      - name: Setup Node LTS
-        uses: actions/setup-node@v4
+      # 👇 Fuerza Node 16 (compat. con Webpack 4)
+      - uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          node-version: '16.x'
 
-      - name: Node/npm versions (debug)
+      - name: Ver versiones
         run: |
           node -v
           npm -v
 
-      - name: Mostrar package.json (debug)
-        working-directory: ${{ steps.root.outputs.dir }}
+      - name: Instalar dependencias (npm)
         run: |
-          sed -n '1,160p' package.json || true
-
-      - name: Install deps (npm)
-        working-directory: ${{ steps.root.outputs.dir }}
-        shell: bash
-        run: |
-          set -e
-          if [ ! -f package.json ]; then
-            echo "No package.json; skipping install."
-            exit 0
-          fi
-      
-          if [ -f package-lock.json ]; then
-            echo "package-lock.json encontrado → usando npm ci"
-            npm ci
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install --no-audit --no-fund
+            fi
           else
-            echo "NO hay package-lock.json → usando npm install"
-            npm install --no-audit --no-fund
-            # Si prefieres forzar lock y luego ci:
-            # npm install --package-lock-only
-            # npm ci
+            echo "No hay package.json en la raíz; busco uno..."
+            first=$(find . -path "*/node_modules/*" -prune -o -name package.json -print | head -n1 || true)
+            if [ -z "$first" ]; then
+              echo "::error::No se encontró package.json"; exit 1
+            fi
+            dir=$(dirname "$first")
+            echo "Usando $dir"
+            cd "$dir"
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install --no-audit --no-fund
+            fi
           fi
 
-      - name: Build (si hay script compile)
-        working-directory: ${{ steps.root.outputs.dir }}
-        run: |
-          if npm run | grep -q "^  compile"; then
-            npm run compile
-          else
-            echo "Sin script compile; continúo."
-          fi
-
-      - name: Package with vsce
-        working-directory: ${{ steps.root.outputs.dir }}
+      - name: Instalar vsce y empaquetar
         run: |
           npm i -g @vscode/vsce
-          vsce --version
-          # IMPORTANTE: package.json debe tener publisher, name, version, engines.vscode
-          # y un README.md (recomendado) para que no se queje
           vsce package
 
-      - name: Verify VSIX
-        working-directory: ${{ steps.root.outputs.dir }}
-        run: |
-          ls -l *.vsix || { echo "::error::No se generó .vsix"; exit 1; }
-
-      - name: Upload VSIX
+      - name: Subir VSIX
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: ${{ steps.root.outputs.dir }}/*.vsix
-
+          path: "**/*.vsix"
