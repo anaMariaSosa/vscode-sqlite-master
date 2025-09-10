@@ -54,9 +54,24 @@ jobs:
 
       - name: Install deps (npm)
         working-directory: ${{ steps.root.outputs.dir }}
+        shell: bash
         run: |
-          # npm ci falla si no hay package-lock.json; hacemos fallback a npm i
-          npm ci || npm i
+          set -e
+          if [ ! -f package.json ]; then
+            echo "No package.json; skipping install."
+            exit 0
+          fi
+      
+          if [ -f package-lock.json ]; then
+            echo "package-lock.json encontrado → usando npm ci"
+            npm ci
+          else
+            echo "NO hay package-lock.json → usando npm install"
+            npm install --no-audit --no-fund
+            # Si prefieres forzar lock y luego ci:
+            # npm install --package-lock-only
+            # npm ci
+          fi
 
       - name: Build (si hay script compile)
         working-directory: ${{ steps.root.outputs.dir }}
